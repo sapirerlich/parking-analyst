@@ -31,31 +31,6 @@ The project is organized as a **Monorepo**, utilizing a shared SQLite database t
 * **Protocol:** Model Context Protocol (MCP)
 * **Key Libraries:** `whatsmeow` (Go), `fastmcp` (Python), `python-dotenv`, `godotenv`
 
-## 🚀 Setup & Installation
-
-### 1. Configure Environment
-Create a `.env` file in the root directory. This ensures security by keeping private Group IDs and local file paths out of version control.
-```env
-PARKING_GROUP_JID="12036302345678@g.us"
-DB_PATH="/Users/yourname/projects/parking-analyst/whatsapp-bridge/store/messages.db"
-```
-
-### 2. Run the WhatsApp Bridge (Go)
-```bash
-cd whatsapp-bridge
-go run main.go
-```
-*On the first run, scan the QR code in the terminal with your WhatsApp app to link the session.*
-
-### 3. Run the Analyst (Python)
-```bash
-cd parking-analyst
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python parking_server.py
-```
-
 ## 🧠 Technical Challenges Solved
 * **Cross-Language Configuration:** Synchronized a Go backend and Python frontend by implementing `godotenv` and `python-dotenv` to share a single source of truth (`.env`).
 * **Data Integrity & Filtering:** Modified the open-source bridge to include a targeted filter, preventing database "noise" from non-parking-related WhatsApp chats.
@@ -84,9 +59,20 @@ Once connected to Claude, you can ask:
 * Python 3.10+
 * The [WhatsApp-MCP Bridge](https://github.com/lharries/whatsapp-mcp) running locally.
 
+
+## 🚀 Setup & Installation
+
+
+
 ### Installation
 1.  **Clone the repository** into your projects folder.
-2.  **Create a Virtual Environment**:
+2. **Configure Environment**
+Create a `.env` file in the root directory. This ensures security by keeping private Group IDs and local file paths out of version control.
+```env
+PARKING_GROUP_JID="..."
+DB_PATH="YOUR_ABSOLUTE_PATH/projects/parking-analyst/whatsapp-bridge/store/messages.db"
+```
+3.  **Create a Virtual Environment**:
     ```bash
     python3 -m venv .venv
     ```
@@ -98,6 +84,17 @@ Once connected to Claude, you can ask:
     pip install --upgrade pip
     pip install -r requirements.txt
     ```
+5. **Run the WhatsApp Bridge (Go)**
+```bash
+cd whatsapp-bridge
+go run main.go
+```
+*On the first run, scan the QR code in the terminal with your WhatsApp app to link the session.*
+
+6. **Run the Analyst (Python)**
+```bash
+python parking_server.py
+```
 
 ### Claude Desktop Configuration
 To connect this server to Claude, add the following to your `claude_desktop_config.json`. **Note:** You must point the `command` path specifically to the Python interpreter inside your `.venv`.
