@@ -64,8 +64,12 @@ python parking_server.py
     2.  **Temporal Match:** Any day within the same hour window.
     3.  **Historical Baseline:** Most frequent spot overall.
 
+## ⚖️ Licensing
+This project is licensed under the MIT License. 
+
 ## 🤝 Credits & Acknowledgements
 This project utilizes a modified version of the [whatsapp-mcp bridge](https://github.com/lharries/whatsapp-mcp) by **lharries**. The original ingestion logic was extended to support specific group filtering and enhanced SQLite schema for parking analysis.
+This is also licensed under the MIT License. The original license is preserved within that directory.
 
 ## 📈 Example Queries
 Once connected to Claude, you can ask:
