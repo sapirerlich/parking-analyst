@@ -7,7 +7,7 @@ from analysis_engine import *
 
 
 mcp = FastMCP("Parking Analyst")
-db_path = '../whatsapp-mcp/whatsapp-bridge/store/messages.db'
+db_path = '/Users/sapirerlich/Desktop/sapir/projects/whatsapp-mcp/whatsapp-bridge/store/messages.db'
 
 @mcp.tool() # 2. This is the MCP Tool definition
 def get_driver_history() -> str:
