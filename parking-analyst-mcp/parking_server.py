@@ -1,13 +1,15 @@
 from fastmcp import FastMCP
 import sqlite3
-import re
 import datetime
 from collections import Counter
 from analysis_engine import * 
+import os
+from dotenv import load_dotenv
 
+load_dotenv() 
 
 mcp = FastMCP("Parking Analyst")
-db_path = '/Users/sapirerlich/Desktop/sapir/projects/whatsapp-mcp/whatsapp-bridge/store/messages.db'
+db_path = os.getenv("DB_PATH")
 
 @mcp.tool() # 2. This is the MCP Tool definition
 def get_driver_history() -> str:
