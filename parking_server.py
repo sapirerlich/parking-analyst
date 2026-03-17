@@ -16,7 +16,7 @@ def get_driver_history() -> str:
     with sqlite3.connect(db_path) as conn:
         cur = conn.cursor()
         parking_history_query = f"""
-        select case when is_for_me = 1 then 'Sapir' else 'Nir' end as driver, content, timestamp
+        select case when is_from_me = 1 then 'Sapir' else 'Nir' end as driver, content, timestamp
         from messages
         """
         parking_history = cur.execute(parking_history_query).fetchall()
