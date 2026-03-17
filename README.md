@@ -73,3 +73,42 @@ Once connected to Claude, you can ask:
 * *"Who usually parks more on Ben Ezra street—Sapir or Nir?"*
 * *"Where is the best place to park on a Tuesday at 7 PM?"*
 * *"What are my most used streets this month?"*
+
+## 🚀 Setup & Installation
+
+### Prerequisites
+* Python 3.10+
+* The [WhatsApp-MCP Bridge](https://github.com/lharries/whatsapp-mcp) running locally.
+
+### Installation
+1.  **Clone the repository** into your projects folder.
+2.  **Create a Virtual Environment**:
+    ```bash
+    python3 -m venv .venv
+    ```
+3.  **Activate the Environment**:
+    * **Mac/Linux**: `source .venv/bin/activate`
+    * **Windows**: `.venv\Scripts\activate`
+4.  **Install Dependencies**:
+    ```bash
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+### Claude Desktop Configuration
+To connect this server to Claude, add the following to your `claude_desktop_config.json`. **Note:** You must point the `command` path specifically to the Python interpreter inside your `.venv`.
+
+```json
+{
+  "mcpServers": {
+    "parking-analyst": {
+      "command": "/YOUR_ABSOLUTE_PATH/parking-analyst/.venv/bin/python3",
+      "args": [
+        "/YOUR_ABSOLUTE_PATH/parking-analyst/parking_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/YOUR_ABSOLUTE_PATH/parking-analyst"
+      }
+    }
+  }
+}
