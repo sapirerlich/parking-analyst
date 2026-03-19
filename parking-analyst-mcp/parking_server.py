@@ -1,5 +1,5 @@
 from fastmcp import FastMCP
-import sqlite3
+import aiomysql
 import datetime
 from collections import Counter
 from analysis_engine import * 
@@ -9,91 +9,105 @@ from dotenv import load_dotenv
 load_dotenv() 
 
 mcp = FastMCP("Parking Analyst")
-db_path = os.getenv("DB_PATH")
 
-@mcp.tool() # 2. This is the MCP Tool definition
-def get_driver_history() -> str:
-    """Retrieves a raw list of recent parking events. Use this when the user asks 'where did Sapir park yesterday?'"""
+# Aiven Connection Details
+DB_HOST = os.getenv("MYSQL_HOST")
+DB_PORT = int(os.getenv("MYSQL_PORT", 3306))
+DB_USER = os.getenv("MYSQL_USER")
+DB_PASSWORD = os.getenv("MYSQL_PASSWORD")
+DB_NAME = os.getenv("MYSQL_DATABASE", "defaultdb")
 
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.cursor()
-        parking_history_query = f"""
-        select case when is_from_me = 1 then 'Sapir' else 'Nir' end as driver, content, timestamp
-        from messages
-        """
-        parking_history = cur.execute(parking_history_query).fetchall()
-
-    formatted_history = []
-    for driver, spot, time in parking_history:
-        formatted_history.append(f"{driver} parked at {spot} at {time}")
-
-    return "\n".join(formatted_history)
+async def get_db_conn():
+    """Helper to create a MySQL connection"""
+    return await aiomysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        db=DB_NAME,
+        autocommit=True
+    )
 
 @mcp.tool()
-def get_street_stats() -> str:
-    """Calculates frequency totals for every street. Use this for general questions like 'which street do we use most?'"""
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.cursor()
-        rows = cur.execute("SELECT content FROM messages").fetchall()
+async def get_driver_history() -> str:
+    """Retrieves recent parking events from the cloud. Use for 'where did Sapir park yesterday?'"""
+    conn = await get_db_conn()
+    async with conn.cursor() as cur:
+        query = """
+        SELECT CASE WHEN is_from_me = 1 THEN 'Sapir' ELSE 'Nir' END as driver, 
+               content, timestamp 
+        FROM messages 
+        ORDER BY timestamp DESC LIMIT 50
+        """
+        await cur.execute(query)
+        rows = await cur.fetchall()
+    conn.close()
+
+    formatted = [f"{r[0]} parked at {r[1]} at {r[2]}" for r in rows]
+    return "\n".join(formatted) if formatted else "No parking history found."
+
+@mcp.tool()
+async def get_street_stats() -> str:
+    """Calculates street totals. Use for 'which street do we use most?'"""
+    conn = await get_db_conn()
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT content FROM messages")
+        rows = await cur.fetchall()
+    conn.close()
     
     streets = {}
-    for row in rows:
-        street_name = normalize_street(row[0]) 
-        streets[street_name] = streets.get(street_name,0) +1
+    for (content,) in rows:
+        street_name = normalize_street(content) 
+        streets[street_name] = streets.get(street_name, 0) + 1
 
-    formatted_history = []
-    for street, times in streets.items():
-        formatted_history.append(f"parked at {street} {times} times")
-
-    return "\n".join(formatted_history)
-
+    formatted = [f"parked at {s} {t} times" for s, t in streets.items()]
+    return "\n".join(formatted) if formatted else "No stats available."
 
 @mcp.tool()
-def get_parking_recommendation(target_hour: int = None, target_day: int = None) -> str:
-    """
-    Heuristic engine that predicts the best spot based on current or target time. Use this for 'where should I park now?'
-    Optional target_hour (0-23) and target_day (0-6, 0=Sun) for future planning.
-    """
+async def get_parking_recommendation(target_hour: int = None, target_day: int = None) -> str:
+    """Predicts best spot based on cloud history. Use for 'where should I park now?'
+    Optional target_hour (0-23) and target_day (0-6, 0=Sun) for future planning."""
 
     now = datetime.datetime.now()
-    current_hour = target_hour if target_hour is not None else now.hour
-    current_day = target_day if target_day is not None else now.strftime('%w') 
+    h = target_hour if target_hour is not None else now.hour
+    d_python = target_day if target_day is not None else int(now.strftime('%w'))
 
-    with sqlite3.connect(db_path) as conn:
-        cur = conn.cursor()
+    conn = await get_db_conn()
+    async with conn.cursor() as cur:
         query = """
         SELECT content, 
-               strftime('%w', timestamp) as day_of_week,
-               strftime('%H', timestamp) as hour
+               (DAYOFWEEK(timestamp) - 1) as day_of_week, 
+               HOUR(timestamp) as hour 
         FROM messages
         """
-        rows = cur.execute(query).fetchall()    
+        await cur.execute(query)
+        rows = await cur.fetchall()
+    conn.close()
 
-    perfect_matches = [] # Same day, +/- 1 hour
-    time_matches = []    # Any day, +/- 1 hour
+    perfect_matches = []
+    time_matches = []
+    all_streets = []
 
-    for content, day, hour in rows:
+    for content, db_day, db_hour in rows:
         street = normalize_street(content)
-        if not street:
-            continue
-        db_hour = int(hour)
-        is_in_window = abs(db_hour - current_hour) <= 1
-        if is_in_window:
+        if not street: continue
+        all_streets.append(street)
+
+        if abs(db_hour - h) <= 1:
             time_matches.append(street)
-            if day == current_day:
+            if int(db_day) == d_python:
                 perfect_matches.append(street)            
     
     if perfect_matches:
         return calculate_best_spot(perfect_matches)
-
     if time_matches:
         return calculate_best_spot(time_matches)
     
-    # If no time_matches were found
-    all_streets = [normalize_street(r[0]) for r in rows if r[0]]
     if all_streets:
         top_overall = Counter(all_streets).most_common(1)[0][0]
-        return f"No specific pattern for this time. Historically, your most used spot is {top_overall}."
+        return f"No specific time pattern. Historically, your top spot is {top_overall}."
+    
+    return "Not enough data yet."
 
 if __name__ == "__main__":
     mcp.run()
