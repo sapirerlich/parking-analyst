@@ -412,6 +412,21 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
+	// 🚨 SIREN: This MUST print for EVERY message on your WhatsApp
+    fmt.Printf("\n🔔 [EVENT] Message from: %s | Text: %s\n", 
+        msg.Info.Chat.String(), 
+        extractTextContent(msg.Message))
+
+    var targetID = os.Getenv("PARKING_GROUP_JID")
+    
+    // 🔍 COMPARE: This shows us if they match
+    if msg.Info.Chat.String() != targetID {
+        fmt.Printf("❌ Skipping: %s does not match target %s\n", msg.Info.Chat.String(), targetID)
+        return 
+    }
+    
+    fmt.Println("✅ MATCH! Saving to database...")
+
 	var PARKING_GROUP_ID = os.Getenv("PARKING_GROUP_JID")
 	if msg.Info.Chat.String() != PARKING_GROUP_ID {
         return // Ignore all other chats
@@ -1021,150 +1036,109 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 
 // Handle history sync events
 func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, historySync *events.HistorySync, logger waLog.Logger) {
-	fmt.Printf("Received history sync event with %d conversations\n", len(historySync.Data.Conversations))
+	fmt.Printf("\n📦 Received history sync event with %d conversations\n", len(historySync.Data.Conversations))
 
+	var targetJID = os.Getenv("PARKING_GROUP_JID")
 	syncedCount := 0
-	for _, conversation := range historySync.Data.Conversations {
-		var PARKING_GROUP_ID = os.Getenv("PARKING_GROUP_JID")
 
-		if conversation.ID == nil || *conversation.ID != PARKING_GROUP_ID {
-			// If the chat ID is missing or doesn't match our group, skip it!
-			continue
-		}
-		// Parse JID from the conversation
+	for _, conversation := range historySync.Data.Conversations {
 		if conversation.ID == nil {
 			continue
 		}
 
 		chatJID := *conversation.ID
 
-		// Try to parse the JID
+		// Filter: Only process the parking group
+		if chatJID != targetJID {
+			continue
+		}
+
+		fmt.Printf("🎯 TARGET MATCHED: Found parking group [%s] in history!\n", chatJID)
+
 		jid, err := types.ParseJID(chatJID)
 		if err != nil {
 			logger.Warnf("Failed to parse JID %s: %v", chatJID, err)
 			continue
 		}
 
-		// Get appropriate chat name by passing the history sync conversation directly
+		// Get the chat name
 		name := GetChatName(client, messageStore, jid, chatJID, conversation, "", logger)
+		
+		// --- FIX: Store the Chat entry FIRST to satisfy Foreign Key constraints ---
+		initialTimestamp := time.Now()
+		if len(conversation.Messages) > 0 && conversation.Messages[0].Message != nil {
+			ts := conversation.Messages[0].Message.GetMessageTimestamp()
+			initialTimestamp = time.Unix(int64(ts), 0)
+		}
+		
+		err = messageStore.StoreChat(chatJID, name, initialTimestamp)
+		if err != nil {
+			logger.Warnf("Failed to pre-store chat %s: %v", chatJID, err)
+			// We continue anyway, but the messages might fail if the FK is strict
+		}
+		// -------------------------------------------------------------------------
 
-		// Process messages
-		messages := conversation.Messages
-		if len(messages) > 0 {
-			// Update chat with latest message timestamp
-			latestMsg := messages[0]
-			if latestMsg == nil || latestMsg.Message == nil {
+		fmt.Printf("📂 Syncing messages for: %s\n", name)
+
+		// Process messages inside this conversation
+		for _, msgWrapper := range conversation.Messages {
+			// historySync uses waWeb.WebMessageInfo which wraps the actual proto.Message
+			if msgWrapper.Message == nil || msgWrapper.Message.Message == nil {
 				continue
 			}
 
-			// Get timestamp from message info
-			timestamp := time.Time{}
-			if ts := latestMsg.Message.GetMessageTimestamp(); ts != 0 {
-				timestamp = time.Unix(int64(ts), 0)
+			// This is the actual *waProto.Message your helper functions need
+			actualMsg := msgWrapper.Message.Message
+
+			// Extract content using your helper functions
+			content := extractTextContent(actualMsg)
+			mediaType, filename, url, mediaKey, sha, encSha, length := extractMediaInfo(actualMsg)
+
+			// Skip if there's no text or media to save
+			if content == "" && mediaType == "" {
+				continue
+			}
+
+			// Determine sender and metadata from the Wrapper (WebMessageInfo)
+			isFromMe := msgWrapper.Message.Key.GetFromMe()
+			sender := jid.User
+			if !isFromMe && msgWrapper.Message.Key.Participant != nil {
+				sender = *msgWrapper.Message.Key.Participant
+			} else if isFromMe {
+				sender = client.Store.ID.User
+			}
+
+			// Get timestamp from the Wrapper
+			ts := time.Unix(int64(msgWrapper.Message.GetMessageTimestamp()), 0)
+			msgID := msgWrapper.Message.Key.GetID()
+
+			// Save to database
+			err = messageStore.StoreMessage(
+				msgID,
+				chatJID,
+				sender,
+				content,
+				ts,
+				isFromMe,
+				mediaType,
+				filename,
+				url,
+				mediaKey,
+				sha,
+				encSha,
+				length,
+			)
+
+			if err != nil {
+				// If you still see FK errors here, ensure StoreChat actually succeeded above
+				logger.Warnf("Failed to store history message %s: %v", msgID, err)
 			} else {
-				continue
-			}
-
-			messageStore.StoreChat(chatJID, name, timestamp)
-
-			// Store messages
-			for _, msg := range messages {
-				if msg == nil || msg.Message == nil {
-					continue
-				}
-
-				// Extract text content
-				var content string
-				if msg.Message.Message != nil {
-					if conv := msg.Message.Message.GetConversation(); conv != "" {
-						content = conv
-					} else if ext := msg.Message.Message.GetExtendedTextMessage(); ext != nil {
-						content = ext.GetText()
-					}
-				}
-
-				// Extract media info
-				var mediaType, filename, url string
-				var mediaKey, fileSHA256, fileEncSHA256 []byte
-				var fileLength uint64
-
-				if msg.Message.Message != nil {
-					mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength = extractMediaInfo(msg.Message.Message)
-				}
-
-				// Log the message content for debugging
-				logger.Infof("Message content: %v, Media Type: %v", content, mediaType)
-
-				// Skip messages with no content and no media
-				if content == "" && mediaType == "" {
-					continue
-				}
-
-				// Determine sender
-				var sender string
-				isFromMe := false
-				if msg.Message.Key != nil {
-					if msg.Message.Key.FromMe != nil {
-						isFromMe = *msg.Message.Key.FromMe
-					}
-					if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
-						sender = *msg.Message.Key.Participant
-					} else if isFromMe {
-						sender = client.Store.ID.User
-					} else {
-						sender = jid.User
-					}
-				} else {
-					sender = jid.User
-				}
-
-				// Store message
-				msgID := ""
-				if msg.Message.Key != nil && msg.Message.Key.ID != nil {
-					msgID = *msg.Message.Key.ID
-				}
-
-				// Get message timestamp
-				timestamp := time.Time{}
-				if ts := msg.Message.GetMessageTimestamp(); ts != 0 {
-					timestamp = time.Unix(int64(ts), 0)
-				} else {
-					continue
-				}
-
-				err = messageStore.StoreMessage(
-					msgID,
-					chatJID,
-					sender,
-					content,
-					timestamp,
-					isFromMe,
-					mediaType,
-					filename,
-					url,
-					mediaKey,
-					fileSHA256,
-					fileEncSHA256,
-					fileLength,
-				)
-				if err != nil {
-					logger.Warnf("Failed to store history message: %v", err)
-				} else {
-					syncedCount++
-					// Log successful message storage
-					if mediaType != "" {
-						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
-					} else {
-						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
-					}
-				}
+				syncedCount++
 			}
 		}
 	}
 
-	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
+	fmt.Printf("✅ History sync complete. Stored %d messages for the parking group.\n", syncedCount)
 }
 
 // Request history sync from the server
