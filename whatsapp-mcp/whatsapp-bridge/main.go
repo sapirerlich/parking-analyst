@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
 
@@ -49,49 +50,49 @@ type MessageStore struct {
 
 // Initialize message store
 func NewMessageStore() (*MessageStore, error) {
-	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
-		return nil, fmt.Errorf("failed to create store directory: %v", err)
-	}
+    dsn := os.Getenv("MYSQL_DSN")
+    
+    db, err := sql.Open("mysql", dsn)
+    if err != nil {
+        return nil, fmt.Errorf("failed to open MySQL: %v", err)
+    }
 
-	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open message database: %v", err)
-	}
+    // Test connection
+    if err := db.Ping(); err != nil {
+        return nil, fmt.Errorf("failed to ping Aiven: %v", err)
+    }
 
-	// Create tables if they don't exist
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS chats (
-			jid TEXT PRIMARY KEY,
-			name TEXT,
-			last_message_time TIMESTAMP
-		);
-		
-		CREATE TABLE IF NOT EXISTS messages (
-			id TEXT,
-			chat_jid TEXT,
-			sender TEXT,
-			content TEXT,
-			timestamp TIMESTAMP,
-			is_from_me BOOLEAN,
-			media_type TEXT,
-			filename TEXT,
-			url TEXT,
-			media_key BLOB,
-			file_sha256 BLOB,
-			file_enc_sha256 BLOB,
-			file_length INTEGER,
-			PRIMARY KEY (id, chat_jid),
-			FOREIGN KEY (chat_jid) REFERENCES chats(jid)
-		);
-	`)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to create tables: %v", err)
-	}
+    fmt.Println("🚀 Connected to Aiven! Creating tables...")
 
-	return &MessageStore{db: db}, nil
+    // MySQL Table Creation
+    // Note: We use VARCHAR(255) for IDs and TEXT for content
+    queries := []string{
+        `CREATE TABLE IF NOT EXISTS chats (
+            jid VARCHAR(255) PRIMARY KEY,
+            name TEXT,
+            last_message_time DATETIME
+        )`,
+        `CREATE TABLE IF NOT EXISTS messages (
+            id VARCHAR(255),
+            chat_jid VARCHAR(255),
+            sender TEXT,
+            content TEXT,
+            timestamp DATETIME,
+            is_from_me BOOLEAN,
+            PRIMARY KEY (id, chat_jid),
+            INDEX (chat_jid)
+        )`,
+    }
+
+    for _, q := range queries {
+        _, err := db.Exec(q)
+        if err != nil {
+            return nil, fmt.Errorf("failed to create table: %v", err)
+        }
+    }
+
+    fmt.Println("✅ Database schema is ready.")
+    return &MessageStore{db: db}, nil
 }
 
 // Close the database connection
@@ -101,30 +102,32 @@ func (store *MessageStore) Close() error {
 
 // Store a chat in the database
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
-	_, err := store.db.Exec(
-		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
-		jid, name, lastMessageTime,
-	)
-	return err
+    _, err := store.db.Exec(`
+        INSERT INTO chats (jid, name, last_message_time) 
+        VALUES (?, ?, ?) 
+        ON DUPLICATE KEY UPDATE name=VALUES(name), last_message_time=VALUES(last_message_time)`,
+        jid, name, lastMessageTime,
+    )
+    return err
 }
 
 // Store a message in the database
 func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, timestamp time.Time, isFromMe bool,
-	mediaType, filename, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) error {
-	// Only store if there's actual content or media
-	if content == "" && mediaType == "" {
-		return nil
-	}
+    mediaType, filename, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) error {
+    
+    if content == "" && mediaType == "" {
+        return nil
+    }
 
-	_, err := store.db.Exec(
-		`INSERT OR REPLACE INTO messages 
-		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
-	)
-	return err
+    _, err := store.db.Exec(`
+        INSERT INTO messages 
+        (id, chat_jid, sender, content, timestamp, is_from_me) 
+        VALUES (?, ?, ?, ?, ?, ?) 
+        ON DUPLICATE KEY UPDATE sender=VALUES(sender), content=VALUES(content), timestamp=VALUES(timestamp)`,
+        id, chatJID, sender, content, timestamp, isFromMe,
+    )
+    return err
 }
-
 // Get messages from a chat
 func (store *MessageStore) GetMessages(chatJID string, limit int) ([]Message, error) {
 	rows, err := store.db.Query(
@@ -826,7 +829,6 @@ func main() {
 		return
 	}
 
-	// container, err := sqlstore.New("sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
